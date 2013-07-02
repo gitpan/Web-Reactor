@@ -9,6 +9,7 @@
 ##############################################################################
 package Web::Reactor::Actions::Native;
 use strict;
+use Exception::Sink;
 use Carp;
 use Web::Reactor::Actions;
 use Data::Dumper;
@@ -59,29 +60,41 @@ sub __find_act_pkg
   my $self  = shift;
 
   my $name = lc shift;
+  
+  my $act_cache = $self->{ 'ACT_PKG_CACHE' };
+  
+  return $act_cache->{ $name } if exists $act_cache->{ $name };
 
   my $app_name = lc $self->{ 'ENV' }{ 'APP_NAME' };
   my $dirs = $self->{ 'ENV' }{ 'LIB_DIRS' } || [];
   if( @$dirs == 0 )
     {
     my $app_root = $self->{ 'ENV' }{ 'APP_ROOT' };
+    boom "missing APP_ROOT" unless -d $app_root; # FIXME: function? get_app_root()
     $dirs = [ "$app_root/lib" ]; # FIXME: 'act' actions ?
     }
 
+  my @asl = @{ $self->{ 'ENV' }{ 'ACTIONS_SETS' } || [] };
+  @asl = ( $app_name, "Base", "Core" ) unless @asl > 0;
+
   # action package
-  for my $ap ( "Reactor::Actions::${app_name}::${name}", "Reactor::Actions::Base::${name}" )
+  for my $asl ( @asl )
   {
+    my $ap = 'Web::Reactor::Actions::' . $asl . '::' . $name;
     my $fn = $ap;
     $fn =~ s/::/\//g;
     # paths
     for my $p ( @$dirs )
       {
       my $ffn = "$p/$fn.pm";
-    print STDERR "actions: $ap --> $fn --> $ffn\n";
+  
+      print STDERR "actions: $ap --> $fn --> $ffn\n";
+  
       next unless -e $ffn;
       # FIXME: check require status!
       require $ffn;
       # print "FOUND ", %INC;
+      $act_cache->{ $name } = $ap;
       return $ap;
       }
   }

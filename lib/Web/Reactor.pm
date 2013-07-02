@@ -18,7 +18,7 @@ use Data::Tools;
 use Data::Dumper;
 use Exception::Sink;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 ##############################################################################
 
@@ -51,6 +51,9 @@ sub new
   my %env = @_;
 
   # FIXME: verify %env content! Data::Validate::Struct
+  
+  # FIXME: alpha/beta development changes sanity
+  boom "LIB_DIRS is replaced by ACTIONS_DIRS and ACTIONS_SETS" if exists $env{ 'LIB_DIRS' };
 
   $class = ref( $class ) || $class;
   my $self = {
@@ -145,7 +148,7 @@ sub main_process
     {
     $self->log( "status: user session expired or closed [$user_sid]" );
     # not logged-in sessions dont expire
-    $user_shr->{ ':XTIME_AT_STR' } = scalar localtime() if time() > $user_shr->{ ':XTIME' };
+    $user_shr->{ ':XTIME_STR' } = scalar localtime() if time() > $user_shr->{ ':XTIME' };
     $user_shr->{ ':CLOSED'       } = 1;
     $user_shr->{ ':ETIME'        } = time();
     $user_shr->{ ':ETIME_STR'    } = scalar localtime();
@@ -190,7 +193,9 @@ sub main_process
       }
     my $v = CGI::param( $n );
     my @v = CGI::param( $n );
-print STDERR "cgiiiiiiiiiiiiiiiiiiiii [$n] [$v] [@v]\n";
+
+    $self->debug( "debug: CGI input param [$n] value [$v] [@v]" );
+    
     if( $self->__input_cgi_skip_invalid_value( $n, $v ) )
       {
       $self->log( "error: invalid CGI/input value for parameter: [$n]" );
@@ -208,6 +213,11 @@ print STDERR "cgiiiiiiiiiiiiiiiiiiiii [$n] [$v] [@v]\n";
       {
       $n = uc $n;
       $input_user_hr->{ $n } = $v;
+      if( ref( $v ) eq 'Fh' )
+        {
+        # this is file upload, get more info
+        $input_user_hr->{ "$n:UPLOAD_INFO" } = CGI::uploadInfo( $v );
+        }
       }
     }
 
@@ -251,12 +261,10 @@ print STDERR "cgiiiiiiiiiiiiiiiiiiiii [$n] [$v] [@v]\n";
 
   # 6. remap form input data, post to safe input
   my $form_name = $input_safe_hr->{ 'FORM_NAME' }; # FIXME: replace with _FN
-    print STDERR Dumper( 'ret map SHR ------ 'x10, "$page_shr", $page_shr );
   if( $form_name and exists $page_shr->{ ':FORM_DEF' }{ $form_name } )
     {
     my $rm = $page_shr->{ ':FORM_DEF' }{ $form_name }{ 'RET_MAP' };
 
-    print STDERR Dumper( 'ret map 'x10, "$page_shr", $page_shr, $rm );
     for my $k ( keys %$rm )
       {
       $input_safe_hr->{ $k } = $rm->{ $k }{ $input_user_hr->{ $k } };
@@ -271,9 +279,6 @@ print STDERR "cgiiiiiiiiiiiiiiiiiiiii [$n] [$v] [@v]\n";
 
   # 8. render output page
   $self->render( $page_name );
-
-#    print STDERR Dumper( '**** end *** ret map 'x10, "$page_shr", $page_shr );
-
 }
 
 sub __create_new_user_session
@@ -831,6 +836,25 @@ sub need_login
   # return $self->forward( _PN => 'login' );
 }
 
+# returns unix time at which user session will expire, undef if no expire time specified
+sub get_user_session_expire_time
+{
+  my $self = shift;
+
+  my $user_shr = $self->get_user_session();
+  return exists $user_shr->{ ':XTIME' } ? $user_shr->{ ':XTIME' } : undef;
+}
+
+# returns time period in seconds, in which user session will expire, undef if no expire time specified
+sub get_user_session_expire_time_in
+{
+  my $self = shift;
+
+  my $xi = $self->get_user_session_expire_time() - time();
+  return $xi > 0 ? $xi : undef;
+}
+
+
 ##############################################################################
 
 sub set_debug
@@ -898,7 +922,8 @@ Startup CGI script example:
   my %cfg = (
             'APP_NAME'     => 'demo',
             'APP_ROOT'     => '/opt/reactor/demo/',
-            'LIB_DIRS'     => [ '/opt/reactor/demo/lib/'  ],
+            'ACTIONS_DIRS' => [ '/opt/reactor/demo/lib/'  ],
+            'ACTIONS_SETS' => [ 'demo', 'Base', 'Core' ],
             'HTML_DIRS'    => [ '/opt/reactor/demo/html/' ],
             'SESS_VAR_DIR' => '/opt/reactor/demo/var/sess/',
             'DEBUG'        => 4,
@@ -982,7 +1007,7 @@ Action module example:
 
 =head1 DESCRIPTION
 
-Web::Reactor provides automation of most of the usual and frequent tasks
+Web::Reactor (WR) provides automation of most of the usual and frequent tasks
 when constructing a web application. Such tasks include:
 
   * User session handling (creation, cookies support, storage)
@@ -997,6 +1022,136 @@ Web::Reactor is designed to allow extending or replacing some parts as:
   * Session storage (data store on filesystem, database, remote or vmem)
   * HTML creation/expansion/preprocessing
   * Page actions/modules execution (can be skipped if custom HTML prep used)
+
+=head1 PAGE NAMES, HTML FILE TEMPLATES, PAGE INSTANCES
+
+WR has a notion of a "page" which represents visible output to the end user 
+browser. It has (i.e. uses) the following attributes:
+
+  * html file template (page name)
+  * page session data
+  * actions code (i.e. callbacks) used inside html text
+  
+All of those represent "page instance" and produce end user html visible page.
+
+"Page names" are limited to be alphanumeric and are mapped to file 
+(or other storage) html content:
+
+                   page name: example
+  html file template will be: page_example.html
+  
+HTML content may include other files (also limited to be alphanumeric):
+
+   include text: <#other_file>
+  file included: other_file.html
+  
+Page names may be requested from the end user side, but include html files may
+be used only from the pages already requested.
+
+=head1 ACTIONS/MODULES/CALLBACKS
+
+# TODO
+
+=head1 HTTP PARAMETERS NAMES
+
+WR uses underscore and one or two letters for its system http/html parameters.
+Some of the system params are:
+
+  _PN  -- html page name (points to file template, restricted to alphanumeric)
+  _P   -- page session
+  _R   -- referer (caller) page session
+
+Usually those names should not be directly used or visible inside actions code.
+More details about how those params are used can be found below.
+
+=head1 USER SESSIONS
+
+WR creates unique session for each connected user. The session is kept by a cookie.
+Usually WR needs justthis cookie to handle all user/server interaction. Inside
+WR action code, user session is represented as a hash reference. It may hold
+arbitrary data. "System" or WR-specific data inside user session has colon as
+prefix:
+
+  # $reo is Web::Reactor object (i.e. context) passed to the action/module code
+  my $user_session = $reo->get_user_session();
+  print STDERR $user_session->{ ':CTIME_STR' };
+  # prints in http log the create time in human friendly form
+
+All data saved inside user session is automatically saved. When needed it can
+be explicitly with:
+
+  $reo->save();
+  # saves all modified context to disk or other storage
+
+=head1 PAGE SESSIONS
+
+Each page presented to the user has own session. It is very similar to the user
+session (it is hash reference, may hold any data, can be saved with $reo->save()).
+It is expected that page sessions hold all context data needed for any page to
+display properly. To preserve page session it is needed that it is included
+in any link to this page instance or in any html form used.
+
+When called for the first time, each page request needs page name (_PN). Afterwards
+a unique page session is created and page name is saved inside. At this moment
+this page instance can be accessed (i.e. given control to) only with a page
+session id (_P):
+
+  $page_sid = ...; # taken from somewhere
+  # to pass control to the page instance:
+  $reo->forward( _P => $page_sid );
+  # the page instance will pull data from its page session and display in
+  # its last known state
+
+Not always page session are needed. For example, when forward to the caller is
+needed, you just need to:
+
+   $reo->forward_back();
+   # this is equivalent to
+   my $ref_page_sid = $reo->get_ref_page_session_id();
+   $reo->forward( _P => $ref_page_sid );
+   
+Each page instance knows the caller page session and can give control back to.
+However it may pass more data when returning back to the caller:
+
+   $reo->forward_back( MORE_DATA => 'is here', OPTIONS_LIST => \@list );
+   
+When new page instance has to be called (created):
+
+
+   $reo->forward_new( _PN => 'some_page_name' );
+
+=head1 CONFIG ENTRIES
+
+Upon creation, Web:Reactor instance gets hash with config entries/keys:
+
+  * APP_NAME      -- alphanumeric application name (plus underscore)
+  * APP_ROOT      -- application root dir, used for app components search
+  * ACTIONS_DIRS  -- directories in which actions are searched
+  * ACTIONS_SETS  -- list of action "sets", appended to ACTIONS_DIRS
+  * HTML_DIRS     -- html file inlude directories
+  * SESS_VAR_DIR  -- used by filesystem session handling to store sess data
+  * DEBUG         -- positive number, enables debugging with verbosity level
+
+Some entries may be omitted and default values are:
+
+  * ACTIONS_DIRS  -- [ "$APP_ROOT/lib"  ]
+  * ACTIONS_SETS  -- [ $APP_NAME, 'Base', 'Core' ]
+  * HTML_DIRS     -- [ "$APP_ROOT/html" ]
+  * SESS_VAR_DIR  -- [ "$APP_ROOT/var"  ]
+  * DEBUG         -- 0
+   
+=head1 API FUNCTIONS
+
+  # TODO: input
+  # TODO: sessions
+  # TODO: arguments, constructing links
+  # TODO: forwarding
+  # TODO: html, forms, session keeping
+
+=head1 DEPLOYMENT, DIRECTORIES, FILESYSTEM STRUCTURE
+
+  # TODO: install, cpan, manual, github, custom locations
+  # TODO: sessions dir, custom storage/session handling
 
 =head1 PROJECT STATUS
 
@@ -1020,6 +1175,14 @@ further contact info, mailing list and github repository is listed below.
   * actions example
   * API description (input data, safe data, sessions, forwarding, actions, html)
   * ...
+
+=head1 REQUIRED ADDITIONAL MODULES
+
+Reactor uses mostly perl core modules but it needs few others:
+
+  * CGI
+  * Exception::Sink
+  * Data::Tools
 
 =head1 DEMO APPLICATION
 
