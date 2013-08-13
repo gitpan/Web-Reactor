@@ -50,7 +50,7 @@ sub call
 
   $text = $cr->( $self->{ 'REO_REACTOR' }, \%args );
 
-  print STDERR "reactor::actions::call result: $text\n";
+  # print STDERR "reactor::actions::call result: $text\n";
 
   return $text;
 }
@@ -81,6 +81,33 @@ sub __find_act_pkg
   for my $asl ( @asl )
   {
     my $ap = 'Web::Reactor::Actions::' . $asl . '::' . $name;
+
+    # print STDERR "testing action: $ap\n";
+    my $fn = $ap;
+    $fn =~ s/::/\//g;
+    $fn .= '.pm';
+    eval
+      {
+      require $fn;
+      };
+    if( ! $@ )  
+      {
+      print STDERR "LOADED! action: $ap\n";
+      $act_cache->{ $name } = $ap;
+      return $ap;
+      }
+    elsif( $@ =~ /Can't locate $fn/)
+      {
+      print STDERR "NOT FOUND: action: $ap: $fn\n";
+      }
+    else
+      {
+      print STDERR "ERROR LOADING: action: $ap: $@\n";
+      }  
+    
+
+    next;
+=pod
     my $fn = $ap;
     $fn =~ s/::/\//g;
     # paths
@@ -88,15 +115,18 @@ sub __find_act_pkg
       {
       my $ffn = "$p/$fn.pm";
   
-      print STDERR "actions: $ap --> $fn --> $ffn\n";
+      print STDERR "looking for file, action: $ap --> $fn --> $ffn\n";
   
       next unless -e $ffn;
       # FIXME: check require status!
+      print STDERR "FOUND! action: $ap --> $fn --> $ffn\n";
       require $ffn;
+      print STDERR "LOADED! action: $ap --> $fn --> $ffn\n";
       # print "FOUND ", %INC;
       $act_cache->{ $name } = $ap;
       return $ap;
       }
+=cut  
   }
 
   return undef;

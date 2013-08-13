@@ -11,14 +11,14 @@ package Web::Reactor;
 use strict;
 use Web::Reactor::Utils;
 use Web::Reactor::HTML::Form;
-use Storable qw( freeze thaw ); # FIXME: move to Data::Tools (data_freeze/data_thaw)
+use Storable qw( dclone freeze thaw ); # FIXME: move to Data::Tools (data_freeze/data_thaw)
 use CGI;
 use CGI::Cookie;
 use Data::Tools;
 use Data::Dumper;
 use Exception::Sink;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 ##############################################################################
 
@@ -43,6 +43,10 @@ our @HTTP_VARS_SAVE  = qw(
                            HTTP_USER_AGENT
                          );
 
+our %ENV_ALLOWED_KEYS = {
+
+                        };
+
 ##############################################################################
 
 sub new
@@ -52,9 +56,6 @@ sub new
 
   # FIXME: verify %env content! Data::Validate::Struct
   
-  # FIXME: alpha/beta development changes sanity
-  boom "LIB_DIRS is replaced by ACTIONS_DIRS and ACTIONS_SETS" if exists $env{ 'LIB_DIRS' };
-
   $class = ref( $class ) || $class;
   my $self = {
              'ENV' => \%env,
@@ -68,6 +69,21 @@ sub new
 #    {
 #    $self->{ 'ENV' }{ 'HTML_DIRS' } = [ "$root/html" ];
 #    }
+
+  my $lib_dirs = $env{ 'LIB_DIRS' } || [];
+  for my $lib_dir ( @$lib_dirs )
+    {
+    boom "invalid or not accessible LIB_DIR [$lib_dir]" unless -d $lib_dir;
+    push @INC, $lib_dir;
+    }
+
+  # sanity, remove '.' from include list, TODO: optionally remove other entries by config (%env)
+  for my $z ( 0 .. scalar( @INC ) - 1 )
+    {
+    next unless $INC[ $z ] eq '.';
+    splice @INC, $z, 1;
+    last;
+    }
 
   my $reo_sess_class = $env{ 'REO_SESS_CLASS' } ||= 'Web::Reactor::Sessions::Filesystem';
   my $reo_prep_class = $env{ 'REO_PREP_CLASS' } ||= 'Web::Reactor::Preprocessor::Expander';
@@ -155,7 +171,7 @@ sub main_process
 
     ( $user_sid, $user_shr ) = $self->__create_new_user_session();
 
-    $self->render( 'eexpired' );
+    $self->render( PAGE => 'eexpired' );
     }
 
   for my $k ( keys %{ $user_shr->{ ":HTTP_CHECK_HR" } } )
@@ -171,7 +187,7 @@ sub main_process
 
     ( $user_sid, $user_shr ) = $self->__create_new_user_session();
 
-    $self->render( 'einvalid' );
+    $self->render( PAGE => 'einvalid' );
     last;
     }
 
@@ -194,7 +210,7 @@ sub main_process
     my $v = CGI::param( $n );
     my @v = CGI::param( $n );
 
-    $self->debug( "debug: CGI input param [$n] value [$v] [@v]" );
+    $self->log_debug( "debug: CGI input param [$n] value [$v] [@v]" );
     
     if( $self->__input_cgi_skip_invalid_value( $n, $v ) )
       {
@@ -272,13 +288,37 @@ sub main_process
       }
     }
 
-  # 7. get page from input (USER/CGI) or page session
+  # 7. get action from input (USER/CGI) or page session
+  my $action_name = lc( $input_safe_hr->{ '_AN' } || $input_user_hr->{ '_AN' } || $page_shr->{ ':ACTION_NAME' } );
+  if( $action_name =~ /^[a-z_0-9]+$/ )
+    {
+    $page_shr->{ ':ACTION_NAME' } = $action_name;
+    }
+  else
+    {
+    # $self->log( "error: invalid action name [$action_name]" );
+    }  
+
+  # 8. get page from input (USER/CGI) or page session
   my $page_name = lc( $input_safe_hr->{ '_PN' } || $input_user_hr->{ '_PN' } || $page_shr->{ ':PAGE_NAME' } || 'index' );
-  $page_shr->{ ':PAGE_NAME' } = $page_name;
+  if( $page_name =~ /^[a-z_0-9]+$/ )
+    {
+    $page_shr->{ ':PAGE_NAME' } = $page_name;
+    }
+  else
+    {
+    $self->log( "error: invalid page name [$page_name]" );
+    }  
 
-
-  # 8. render output page
-  $self->render( $page_name );
+  # 9. render output action/page
+  if( $action_name )
+    {
+    $self->render( ACTION => $action_name );
+    }
+  else
+    {
+    $self->render( PAGE => $page_name );
+    }  
 }
 
 sub __create_new_user_session
@@ -351,6 +391,17 @@ sub get_page_session
   return $page_shr;
 }
 
+sub get_http_env
+{
+  my $self  = shift;
+
+  my $user_shr = $self->get_user_session();
+
+  boom "missing HTTP_ENV inside user session" unless exists $user_shr->{ ':HTTP_ENV_HR' };
+  
+  return $user_shr->{ ':HTTP_ENV_HR' };
+}
+
 sub get_page_session_id
 {
   my $self  = shift;
@@ -417,6 +468,8 @@ sub args
 {
   my $self = shift;
   my %args = @_;
+  
+  hash_uc_ipl( \%args );
 
   my $link_sid;
   my $link_shr;
@@ -486,7 +539,7 @@ sub get_cookie
   my $name = shift;
 
   my $cookie = CGI::cookie( $name );
-  $self->debug( "get_cookie: name [$name] value [$cookie]" );
+  $self->log_debug( "get_cookie: name [$name] value [$cookie]" );
   return $cookie;
 }
 
@@ -520,6 +573,7 @@ sub set_headers
   my $self  = shift;
   my %h = @_;
 
+  $self->{ 'OUTPUT' }{ 'HEADERS' } ||= {};
   $self->{ 'OUTPUT' }{ 'HEADERS' } = { %{ $self->{ 'OUTPUT' }{ 'HEADERS' } }, %h };
 }
 
@@ -544,7 +598,7 @@ sub __make_headers
 
   $headers .= "\n\n";
 
-  $self->debug_dumper( 'HEADERS', $headers );
+  $self->log_dumper( 'HEADERS', $headers );
 
   return $headers;
 }
@@ -568,7 +622,7 @@ sub save
 
       next if $sha1 eq $cache1;
 
-      $self->debug( "saving session data [$type:$sid]" );
+      $self->log_debug( "saving session data [$type:$sid]" );
 
       $mod_cache->{ $type }{ $sid } = $sha1;
 
@@ -649,44 +703,49 @@ sub crypto_thaw_hex
 
 ##############################################################################
 
-# FIXME: remove and use only Exception::Sink::boom();
-sub boom2
-{
-  my $self = shift;
-
-  my $msg = shift;
-  chomp( $msg );
-  $msg = "boom: fatal: [$$] $msg\n";
-  my @st = ( $msg );
-  my $i = 0;
-  while ( my ( $pack, $file, $line, $subname ) = caller($i++) )
-    {
-    push @st, "      [$$] $i: called from: ($file:$line) $pack::$subname\n";
-    }
-  die( @st );
-}
-
-sub debug
+sub set_debug
 {
   my $self = shift;
   
-  return unless $self->is_debug();
-  $self->log( "debug: " . join( ' ', @_ ) );
+  if( @_ > 0 )
+    {
+    $self->{ 'ENV' }{ 'DEBUG' } = shift() ? 1 : 0;
+    }
+  return $self->{ 'ENV' }{ 'DEBUG' };
 }
 
-sub debug_dumper
+sub is_debug
 {
   my $self = shift;
 
-  return unless $self->is_debug();
-  $self->log( "debug: " . Dumper( @_ ) );
+  return $self->{ 'ENV' }{ 'DEBUG' };
 }
+
+#-----------------------------------------------------------------------------
 
 sub log
 {
   my $self = shift;
 
   print STDERR @_;
+}
+
+sub log_debug
+{
+  my $self = shift;
+  
+  return unless $self->is_debug();
+  my $msg = join( ' ', @_ );
+  $msg = "debug: $msg" unless $msg =~ /^debug:/i;
+  $self->log( $msg );
+}
+
+sub log_dumper
+{
+  my $self = shift;
+
+  return unless $self->is_debug();
+  $self->log_debug( Dumper( @_ ) );
 }
 
 ##############################################################################
@@ -723,23 +782,57 @@ sub __input_cgi_skip_invalid_value
 sub render
 {
   my $self = shift;
-  my $page = shift;
+  my %opt = @_;
+  
+  my $action = $opt{ 'ACTION' };
+  my $page   = $opt{ 'PAGE'   };
+
+  # FIXME: content vars handling set_content()/etc.
+  my $ah = $self->args_here();
+  $self->{ 'HTML_CONTENT' }{ 'form_input_session_keeper' } = "<input type=hidden name=_ value=$ah>";
+
+  my $page_text;
+
+  if( $action )
+    {
+    # FIXME: handle content type also!
+    $page_text = $self->act_call( $action );
+    }
+  elsif( $page )
+    {
+    $page_text = $self->prep_load_file( "page_$page" );
+    }
+  else
+    {
+    boom "render() needs PAGE or ACTION";
+    }    
+
+  # FIXME: preprocess and translation only for content-type text/*
+  $page_text = $self->prep_process( $page_text );
+  # FIXME: translation
+  $page_text =~ s/<~(([^<>]*))>/$1/g;
 
   my $page_headers = $self->__make_headers();
-
-  my $page_text = $self->prep_load_file( "page_$page" );
-  $page_text = $self->prep_process( $page_text );
 
   print $page_headers;
   print $page_text;
 
 #$self->log( Dumper( $page, "[$page_headers]", $page_text ) );
 
-  {
-  local $Data::Dumper::sortkeys = 1;
-  #print STDERR "<hr><pre>" . Dumper( $self ) . "</pre>";
-  print "<hr><pre>" . Dumper( $self ) . "</pre>";
-  }
+  if( $self->is_debug() )
+    {
+    local $Data::Dumper::Sortkeys = 1;
+    local $Data::Dumper::Terse = 1;
+    local $Data::Dumper::Indent = 3;
+    print "<hr><pre>";
+    print Dumper( 'USER INPUT:'.'_'x80, $self->{ 'INPUT_USER_HR' } );
+    print Dumper( 'SAFE INPUT:'.'_'x80, $self->{ 'INPUT_SAFE_HR' } );
+    print Dumper( 'PAGE SESSION:'.'_'x80, $self->{ 'SESSIONS' }{ 'DATA' }{ 'PAGE' }{ $self->{ 'SESSIONS' }{ 'SID' }{ 'PAGE' } } );
+    print Dumper( 'USER SESSION:'.'_'x80, $self->{ 'SESSIONS' }{ 'DATA' }{ 'USER' }{ $self->{ 'SESSIONS' }{ 'SID' }{ 'USER' } } );
+    print "<hr>";
+    print Dumper( $self );
+    print "</pre><hr>";
+    }
 
   sink 'CONTENT';
 }
@@ -792,6 +885,60 @@ sub forward_new
 ## helpers
 ##
 
+sub __param
+{
+  my $self = shift;
+  my $safe = shift; # 1 safe_input, 0 user_input
+
+  my $input_hr;
+  my $save_key;
+  if( $safe )
+    {
+    $input_hr = $self->get_safe_input();
+    $save_key = 'SAVE_SAFE_INPUT';
+    }
+  else
+    {
+    $input_hr = $self->get_user_input();
+    $save_key = 'SAVE_USER_INPUT';
+    }
+    
+  my $ps = $self->get_page_session();
+  
+  $ps->{ $save_key } ||= {};  
+  
+  my @res;
+  while( @_ )
+    {
+    my $p = uc shift;
+    if( exists $input_hr->{ $p } )
+      {
+      $ps->{ $save_key }{ $p } = $input_hr->{ $p };
+      }
+    push @res, $ps->{ $save_key }{ $p };  
+    }
+  
+  return wantarray ? @res : shift( @res );
+}
+
+sub param_unsafe
+{
+  my $self = shift;
+  return $self->__param( 0, @_ );
+}
+
+sub param
+{
+  my $self = shift;
+  return $self->__param( 1, @_ );
+}
+
+sub param_safe
+{
+  my $self = shift;
+  return $self->param( @_ );
+}
+
 sub is_logged_in
 {
   my $self = shift;
@@ -824,6 +971,7 @@ sub logout
   my ( $user_sid, $user_shr ) = $self->__create_new_user_session();
 }
 
+# FIXME: s?
 sub need_login
 {
   my $self = shift;
@@ -834,6 +982,26 @@ sub need_login
   return $self->forward_url( "?_=$fw" );
   
   # return $self->forward( _PN => 'login' );
+}
+
+sub set_user_session_expire_time
+{
+  my $self  = shift;
+  my $xtime = shift;
+
+  my $user_shr = $self->get_user_session();
+  $user_shr->{ ':XTIME'     } = $xtime; # FIXME: sanity?
+  $user_shr->{ ':XTIME_STR' } = scalar localtime $user_shr->{ ':XTIME' };
+  return exists $user_shr->{ ':XTIME' } ? $user_shr->{ ':XTIME' } : undef;
+}
+
+sub set_user_session_expire_time_in
+{
+  my $self    = shift;
+  my $seconds = shift;
+
+  # FIXME: support for more user friendly time periods 10m 60s
+  return $self->set_user_session_expire_time( time() + $seconds );
 }
 
 # returns unix time at which user session will expire, undef if no expire time specified
@@ -854,25 +1022,17 @@ sub get_user_session_expire_time_in
   return $xi > 0 ? $xi : undef;
 }
 
-
-##############################################################################
-
-sub set_debug
+sub need_post_method
 {
   my $self = shift;
+
+  my $he = $self->get_http_env();
   
-  if( @_ > 0 )
-    {
-    $self->{ 'ENV' }{ 'DEBUG' } = shift() ? 1 : 0;
-    }
-  return $self->{ 'ENV' }{ 'DEBUG' };
-}
+  print STDERR Dumper( $he ); 
+  return if $he->{ 'REQUEST_METHOD' } eq 'POST';
 
-sub is_debug
-{
-  my $self = shift;
-
-  return $self->{ 'ENV' }{ 'DEBUG' };
+  $self->logout();
+  $self->render( PAGE => 'epostrequired' );
 }
 
 ##############################################################################
@@ -922,7 +1082,7 @@ Startup CGI script example:
   my %cfg = (
             'APP_NAME'     => 'demo',
             'APP_ROOT'     => '/opt/reactor/demo/',
-            'ACTIONS_DIRS' => [ '/opt/reactor/demo/lib/'  ],
+            'LIB_DIRS'     => [ '/opt/reactor/demo/lib/'  ],
             'ACTIONS_SETS' => [ 'demo', 'Base', 'Core' ],
             'HTML_DIRS'    => [ '/opt/reactor/demo/html/' ],
             'SESS_VAR_DIR' => '/opt/reactor/demo/var/sess/',
@@ -1050,12 +1210,70 @@ be used only from the pages already requested.
 
 =head1 ACTIONS/MODULES/CALLBACKS
 
-# TODO
+Actions are loaded and executed by package names. In the HTML source files they
+can be called this way:
+
+  <&test_action arg1=val1 arg2=val2 flag1 flag2...>
+  <&test_action>
+  
+This will instruct Reactor action handler to look for this package name inside
+standard or user-added library directories:
+
+  Web/Reactor/Actions/*/test_action.pm
+
+Asterisk will be replaced with the name of the used "action sets" give in config
+hash:
+
+       'ACTIONS_SETS' => [ 'demo', 'Base', 'Core' ],
+
+So the result list in this example will be:
+
+  Web/Reactor/Actions/demo/test_action.pm
+  Web/Reactor/Actions/Base/test_action.pm
+  Web/Reactor/Actions/Core/test_action.pm
+
+This is used to allow overriding of standard modules or modules you dont have
+write access to.
+
+Another way to call a module is directly from another module code with:
+
+  $reo->act_call( 'test_action', @args );
+  
+The package file will look like this:
+
+   package Web/Reactor/Actions/demo/test_action;
+   use strict;
+   
+   sub main
+   {
+     my $reo  = shift; # Web::Reactor object/instance
+     my %args = @_; # all args passed to the action
+     
+     my $html_args = $args{ 'HTML_ARGS' }; # all
+     ...
+     return $result_data; # usually html text
+   }
+   
+$html_args is hashref with all args give inside the html code if this action 
+is called from a html text. If you look the example above:
+
+  <&test_action arg1=val1 arg2=val2 flag1 flag2...>
+  
+The $html_args will look like this:
+
+  $html_args = {
+               'arg1'  => 'val1',
+               'arg2'  => 'val2',
+               'flag1' => 1,
+               'flag2' => 1,
+               };
+
+
 
 =head1 HTTP PARAMETERS NAMES
 
-WR uses underscore and one or two letters for its system http/html parameters.
-Some of the system params are:
+Web::Reactor uses underscore and one or two letters for its system http/html 
+parameters. Some of the system params are:
 
   _PN  -- html page name (points to file template, restricted to alphanumeric)
   _P   -- page session
@@ -1126,7 +1344,7 @@ Upon creation, Web:Reactor instance gets hash with config entries/keys:
 
   * APP_NAME      -- alphanumeric application name (plus underscore)
   * APP_ROOT      -- application root dir, used for app components search
-  * ACTIONS_DIRS  -- directories in which actions are searched
+  * LIB_DIRS      -- directories from which actions and other libs are loaded
   * ACTIONS_SETS  -- list of action "sets", appended to ACTIONS_DIRS
   * HTML_DIRS     -- html file inlude directories
   * SESS_VAR_DIR  -- used by filesystem session handling to store sess data
@@ -1134,7 +1352,7 @@ Upon creation, Web:Reactor instance gets hash with config entries/keys:
 
 Some entries may be omitted and default values are:
 
-  * ACTIONS_DIRS  -- [ "$APP_ROOT/lib"  ]
+  * LIB_DIRS      -- [ "$APP_ROOT/lib"  ]
   * ACTIONS_SETS  -- [ $APP_NAME, 'Base', 'Core' ]
   * HTML_DIRS     -- [ "$APP_ROOT/html" ]
   * SESS_VAR_DIR  -- [ "$APP_ROOT/var"  ]
@@ -1198,9 +1416,9 @@ forwarding.
 
 =head1 GITHUB REPOSITORY
 
-  https://github.com/cade4/perl-web-reactor
+  https://github.com/cade-vs/perl-web-reactor
   
-  git clone git://github.com/cade4/perl-web-reactor.git
+  git clone git://github.com/cade-vs/perl-web-reactor.git
 
 =head1 AUTHOR
 

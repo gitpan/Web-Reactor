@@ -31,7 +31,7 @@ sub new
              };
 
   my $reo = $env{ 'REO_REACTOR' };
-  if( ref( $reo ) eq 'Web::Reactor' )
+  if( ref( $reo ) =~ /^Web::Reactor(::|$)/ )
     {
     $self->{ 'REO_REACTOR' } = $reo;
     }
@@ -66,6 +66,8 @@ sub begin
   my $form_name = uc $opt{ 'NAME'   };
   my $method    = uc $opt{ 'METHOD' } || 'POST';
   my $action    =    $opt{ 'ACTION' } || '?';
+
+  $self->{ 'CLASS_MAP' } = $opt{ 'CLASS_MAP' } || {};
 
   $form_name =~ /^[A-Z_0-9:]+$/ or confess "invalid or empty NAME attribute";
   $method    =~ /^(POST|GET)$/  or confess "METHOD can either POST or GET";
@@ -135,7 +137,7 @@ sub checkbox
   my %opt = @_;
 
   my $name  = uc $opt{ 'NAME'  };
-  my $class = uc $opt{ 'CLASS' } || 'checkbox';
+  my $class = uc $opt{ 'CLASS' } || $self->{ 'CLASS_MAP' }{ 'CHECKBOX' } || 'checkbox';
   my $value =    $opt{ 'VALUE' };
 
   $name =~ /^[A-Z_0-9:]+$/ or croak "invalid or empty NAME attribute [$name]";
@@ -145,7 +147,7 @@ sub checkbox
 
   my $text;
 
-print STDERR "ccccccccccccccccccccc CHECKBOX [$name] [$value]\n";
+#print STDERR "ccccccccccccccccccccc CHECKBOX [$name] [$value]\n";
   $text .= "<input type='checkbox' name='$name' value='1' $options>";
 
   return $text;
@@ -166,7 +168,7 @@ sub radio
   my %opt = @_;
 
   my $name  = uc $opt{ 'NAME'  };
-  my $class = uc $opt{ 'CLASS' } || 'radio';
+  my $class = uc $opt{ 'CLASS' } || $self->{ 'CLASS_MAP' }{ 'RADIO' } || 'radio';
   my $on    =    $opt{ 'ON'    }; # active?
   my $val   =    $opt{ 'VAL'   };
   my $ret   =    $opt{ 'RET'   } || $opt{ 'RETURN' } || 1; # map return value!
@@ -219,8 +221,6 @@ $data = {
 
 =cut
 
-
-
 sub select
 {
   my $self = shift;
@@ -228,7 +228,7 @@ sub select
   my %opt = @_;
 
   my $name  = uc $opt{ 'NAME'  };
-  my $class = uc $opt{ 'CLASS' } || 'select';
+  my $class = uc $opt{ 'CLASS' } || $self->{ 'CLASS_MAP' }{ 'SELECT' } || 'select';
   my $rows  =    $opt{ 'SIZE'  } || $opt{ 'ROWS'  } || 1;
 
   $name =~ /^[A-Z_0-9:]+$/ or croak "invalid or empty NAME attribute [$name]";
@@ -277,7 +277,7 @@ sub select
       my $value = $hr->{ 'VALUE'    };
 
       $sel = 'selected' if $sel_hr and $sel_hr->{ $key };
-print STDERR "sssssssssssssssssssssssss RADIO [$name] [$value] [$key] $sel\n";
+#print STDERR "sssssssssssssssssssssssss RADIO [$name] [$value] [$key] $sel\n";
       $text .= $self->radio( NAME => $name, RET => $key, ON => $sel ) . " $value";
       $text .= "<br>" if $opt{ 'RADIO' } != 2;
       }
@@ -298,7 +298,7 @@ print STDERR "sssssssssssssssssssssssss RADIO [$name] [$value] [$key] $sel\n";
       $self->__set_ret_map( $name, $id => $key );
 
       $sel = 'selected' if $sel_hr and $sel_hr->{ $key };
-print STDERR "sssssssssssssssssssssssss RADIO [$name] [$value] [$key] $sel\n";
+#print STDERR "sssssssssssssssssssssssss RADIO [$name] [$value] [$key] $sel\n";
       $text .= "<option value='$id' $sel>$value$pad</option>";
       }
 
@@ -326,9 +326,9 @@ sub textarea
   my %opt = @_;
 
   my $name  = uc $opt{ 'NAME'  };
-  my $class = uc $opt{ 'CLASS' } || 'textarea';
+  my $class = uc $opt{ 'CLASS' } || $self->{ 'CLASS_MAP' }{ 'TEXTAREA' } || 'textarea';
   my $id    =    $opt{ 'ID'    };
-  my $data  =    $opt{ 'DATA'  };
+  my $data  =    $opt{ 'VALUE' };
   my $rows  =    $opt{ 'ROWS'  } || 10;
   my $cols  =    $opt{ 'COLS'  } ||  5;
   my $geo   =    $opt{ 'GEOMETRY' }  || $opt{ 'GEO' };
@@ -367,7 +367,7 @@ sub input
   my %opt = @_;
 
   my $name  = uc $opt{ 'NAME'  };
-  my $class = uc $opt{ 'CLASS' } || 'input';
+  my $class = uc $opt{ 'CLASS' } || $self->{ 'CLASS_MAP' }{ 'INPUT' } || 'line';
   my $value =    $opt{ 'VALUE' };
   my $id    =    $opt{ 'ID' };
   # FIXME: default data?
@@ -419,6 +419,8 @@ sub button
 
   $name =~ /^[A-Z_0-9:]+$/ or croak "invalid or empty NAME attribute [$name]";
   my $text;
+  
+  $name =~ s/^button://i;
 
   $text .= "<input class='$class' type='submit' name='button:$name' value='$value' onDblClick='return false;' >";
 
@@ -454,7 +456,7 @@ sub image_button
   return $text;
 }
 
-sub image_submit_default
+sub image_button_default
 {
   my $self = shift;
 
@@ -471,7 +473,7 @@ sub image_submit_default
   $opt{ 'WIDTH'  } = 0;
   $opt{ 'CLASS'  } = $opt{ 'CLASS'  } || $default_class;
 
-  $self->image_submit( %opt );
+  $self->image_button( %opt );
 }
 
 =pod

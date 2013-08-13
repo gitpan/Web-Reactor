@@ -42,6 +42,8 @@ sub load_file
 
   die "invalid page name, expected ALPHANUMERIC, got [$pn]" unless $pn =~ /^[a-z_0-9]+$/;
 
+  my $reo = $self->{ 'REO_REACTOR' };
+
   if( exists $self->{ 'FILE_CACHE' }{ $pn } )
     {
     # FIXME: log: debug: file cache hit
@@ -69,8 +71,8 @@ sub load_file
 
   if( ! $fn )
     {
-    use Data::Dumper;
-    print STDERR Dumper( $dirs, $fn );
+    # FIXME: not a error really, more like warning, should be able to disable :))
+    $reo->log( "error: cannot find file [$fn] dirs list [@$dirs]" );
     return undef;
     }
 
@@ -92,11 +94,10 @@ sub process
 
   # FIXME: cache here? moje bi ne, zaradi modulite
   $text =~ s/<([\$\&\#])([a-zA-Z_0-9]+)(\s*[^>]*)*>/$self->__process_tag( $1, $2, $3, $opt )/ge;
-
+  $text =~ s/reactor_((new|back|here)_)?href=([a-z_0-9]+\.([a-z]+)|\.\/?)?\?([^\n\r\s>"']*)/$self->__process_href( $2, $3, $5 )/gie;
 
   return $text;
 }
-
 
 sub __process_tag
 {
@@ -114,6 +115,8 @@ sub __process_tag
   die "preprocess loop detected, tag [$type$tag] path [$path]" if $opt->{ 'SEEN:' . $type . $tag }++;
   die "empty or invalid tag" unless $tag =~ /^[a-zA-Z_0-9]+$/;
 
+  my $reo = $self->{ 'REO_REACTOR' };
+
   $tag = lc $tag;
 
   my $text;
@@ -121,8 +124,8 @@ sub __process_tag
   if( $type eq '$' )
     {
     # FIXME: get content from reactor?
-    $text = undef unless exists $self->{ 'ENV' }{ 'CONTENT' }{ $tag };
-    $text = $self->{ 'ENV' }{ 'CONTENT' }{ $tag };
+    $text = undef unless exists $reo->{ 'HTML_CONTENT' }{ $tag };
+    $text = $reo->{ 'HTML_CONTENT' }{ $tag };
     }
   elsif( $type eq '#' )
     {
@@ -138,7 +141,7 @@ sub __process_tag
       my $v = $4 || $5 || $6 || 1;
       $args{ $k } = $v;
       }
-    $text = $self->{ 'REO_REACTOR' }->act_call( $tag, ARGS => \%args );
+    $text = $reo->act_call( $tag, HTML_ARGS => \%args );
     }
   else
     {
@@ -148,6 +151,39 @@ sub __process_tag
   $text = $self->process( $text, $opt );
 
   return $text;
+}
+
+sub __process_href
+{
+  my $self   = shift;
+  
+  my $type   = lc shift || 'here';
+  my $script = shift;
+  my $data   = shift;
+  
+  my $data_hr = url2hash( $data );
+  
+  my $reo = $self->{ 'REO_REACTOR' };
+
+  my $href;
+  if( $type eq 'new' )
+    {
+    $href = $reo->args_new( %$data_hr );
+    }
+  elsif( $type eq 'back' )
+    {
+    $href = $reo->args_back( %$data_hr );
+    }
+  elsif( $type eq 'here' )
+    {
+    $href = $reo->args_here( %$data_hr );
+    }
+  else
+    {
+    boom "invalid first argument, expected one of (new|back|here)";
+    }
+  
+  return "href=?_=$href";  
 }
 
 ##############################################################################
